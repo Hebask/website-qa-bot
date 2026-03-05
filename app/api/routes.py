@@ -52,4 +52,9 @@ def ask(req: AskRequest):
     if not pages:
         raise HTTPException(status_code=400, detail="No pages found. Run /crawl first.")
 
-    return {"question": req.question, "answer": answer_question(req.question, top_k=req.top_k)}
+    result = answer_question(req.question, top_k=req.top_k)  # we'll return dict now
+    return {
+        "question": req.question,
+        "top_k": req.top_k,
+        **result
+    }
