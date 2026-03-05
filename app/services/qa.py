@@ -4,11 +4,8 @@ from app.core.config import OPENAI_API_KEY, OPENAI_MODEL
 from app.services.scraper import fetch_page
 from app.services.parser import extract_page_data, normalize_url
 from app.services.storage import load_pages, save_chunks, load_chunks, save_embedded_chunks, load_embedded_chunks
-from app.services.retrieval import select_top_k
 from app.services.chunking import chunk_text
-from app.services.retrieval_chunks import select_top_k_chunks
 from app.services.embeddings import embed_texts, embed_query
-from app.services.retrieval_embed import top_k_by_embedding
 from app.services.retrieval_hybrid import hybrid_top_k
 from app.services.hash_utils import sha256_text
 import json
@@ -195,16 +192,24 @@ def build_and_save_chunks() -> int:
     save_embedded_chunks(embedded_chunks)
     return len(all_chunks)
 
-def answer_question(question: str, top_k: int = 6) -> str:
+def answer_question(question: str, top_k: int = 6) -> dict:
     chunks = load_embedded_chunks()
     if not chunks:
-        return "No embedded chunks found. Please run /crawl first (it will generate embeddings)."
+        return {
+            "answer": "No embedded chunks found. Please run /crawl first (it will generate embeddings).",
+            "sources": [],
+            "evidence_chunk_ids": [],
+        }
 
     q_emb = embed_query(question)
     selected = hybrid_top_k(question, q_emb, chunks, k=top_k, alpha=0.7)
 
     if not selected:
-        return "I could not find that information in the scraped website content.\n\nSources: None"
+        return {
+            "answer": "I could not find that information in the scraped website content.",
+            "sources": [],
+            "evidence_chunk_ids": [],
+        }
 
     context_parts = []
     for ch in selected:
@@ -219,7 +224,7 @@ def answer_question(question: str, top_k: int = 6) -> str:
 
     system_prompt = (
         "Return ONLY raw JSON object. Do not wrap it in quotes. "
-        "Do not escape characters. No extra text."
+        "Do not escape characters. No extra text. "
         "You answer ONLY using the provided chunks. "
         "Return ONLY valid JSON (no extra text, no markdown). "
         "The JSON MUST match this schema exactly: "
@@ -244,21 +249,17 @@ def answer_question(question: str, top_k: int = 6) -> str:
         answer = (data.get("answer") or "").strip()
         evidence_ids = set(data.get("evidence_chunk_ids") or [])
     except Exception:
-        # If model breaks the JSON rule, return raw output but no sources
-        return f"{raw_text}\n\nSources: No evidence chunk IDs were returned by the model."
+        return {
+            "answer": raw_text,
+            "sources": [],
+            "evidence_chunk_ids": [],
+        }
 
-    # Evidence-only sources (no fallback to all retrieved)
     id_to_url = {ch["id"]: ch["url"] for ch in selected}
     used_urls = [id_to_url[i] for i in evidence_ids if i in id_to_url]
-    sources = ", ".join(sorted(set(used_urls)))
-
-    if not sources:
-        sources = "No evidence chunk IDs were returned by the model."
-
-        return {"answer": answer,"sources": [],"evidence_chunk_ids": [],}
 
     return {
-    "answer": answer,
-    "sources": sorted(set(used_urls)),
-    "evidence_chunk_ids": sorted(list(evidence_ids)),
-}
+        "answer": answer,
+        "sources": sorted(set(used_urls)),
+        "evidence_chunk_ids": sorted(list(evidence_ids)),
+    }
